@@ -1,0 +1,8 @@
+# Real env file — never commit this
+.env
+.env.local
+
+# Keys
+*.key
+*.pem
+**/secrets/

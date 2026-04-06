@@ -1,0 +1,152 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: Gluetun
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    networks:
+      - arr_net
+    ports:
+      - 6767:6767/tcp   # Bazarr
+      - 7878:7878/tcp   # Radarr
+      - 8388:8388/tcp   # Gluetun HTTP proxy
+      - 8388:8388/udp
+      - 8888:8888/tcp   # Gluetun control
+      - 8989:8989/tcp   # Sonarr
+      - 9696:9696/tcp   # Prowlarr
+      - 8191:8191/tcp   # FlareSolverr
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_PUBLIC_KEY=${WIREGUARD_PUBLIC_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - WIREGUARD_ENDPOINT_IP=${WIREGUARD_ENDPOINT_IP}
+      - WIREGUARD_ENDPOINT_PORT=${WIREGUARD_ENDPOINT_PORT:-51820}
+      # Allow LAN traffic to pass through (adjust to your subnet)
+      - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.168.1.0/24}
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/gluetun:/gluetun:rw
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    # All traffic routed through Gluetun VPN tunnel
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/radarr:/config:rw
+      - ${MEDIA_PATH}:/data:rw
+      - ${DOWNLOADS_PATH}:/downloads:rw
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/sonarr:/config:rw
+      - ${MEDIA_PATH}:/data:rw
+      - ${DOWNLOADS_PATH}:/downloads:rw
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/prowlarr:/config:rw
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/bazarr:/config:rw
+      - ${MEDIA_PATH}:/data:rw
+    restart: unless-stopped
+
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    # Recyclarr runs on clearnet — only talks to Radarr/Sonarr internally
+    networks:
+      - arr_net
+    user: ${PUID:-1000}:${PGID:-1000}
+    volumes:
+      - ${APPDATA_PATH}/recyclarr:/config
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      # Syncs TRaSH custom formats daily at 3 AM
+      - CRON_SCHEDULE=0 3 * * *
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    # SABnzbd on clearnet — Usenet doesn't require VPN
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/sabnzbd:/config
+      - ${DOWNLOADS_PATH}:/downloads
+    ports:
+      - 8090:8080
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    # Routes through VPN — handles Cloudflare-protected indexers
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - LOG_LEVEL=info
+    restart: unless-stopped
+
+networks:
+  arr_net:
+    driver: bridge
