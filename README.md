@@ -16,6 +16,8 @@ Tested on Unraid 7.2.4. Works on any Linux host running Docker Compose.
 | [Prowlarr](https://prowlarr.com) | Indexer manager — syncs to Radarr/Sonarr | ✅ Through VPN |
 | [Bazarr](https://bazarr.media) | Subtitle automation | ✅ Through VPN |
 | [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) | Cloudflare bypass for protected indexers | ✅ Through VPN |
+| [Lidarr](https://lidarr.audio) | Music collection manager | ✅ Through VPN |
+| [Decluttarr](https://github.com/ManiMatter/decluttarr) | Stalled download cleaner | Clearnet |
 | [Recyclarr](https://recyclarr.dev) | Syncs TRaSH Guide profiles to Radarr/Sonarr | Clearnet |
 | [SABnzbd](https://sabnzbd.org) | Usenet download client | Clearnet |
 
