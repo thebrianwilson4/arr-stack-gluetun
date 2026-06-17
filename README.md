@@ -26,22 +26,52 @@ Everything is connected and talks to each other automatically once configured.
 
 ## Optional Add-Ons
 
-You can turn these on or off in a single line in your `.env` file — no editing the compose file required.
+> **These are all opt-in. Out of the box, this stack runs movies and shows only. Nothing below is enabled unless you explicitly add it to `COMPOSE_PROFILES` in your `.env` file.**
 
 | Add-on | What it does | Profile name |
 | --- | --- | --- |
+| [Jellyseerr](https://github.com/Fallenbagel/jellyseerr) | Request portal — lets friends and family browse and request content | `requests` |
 | [Lidarr](https://lidarr.audio) | Finds and manages your music collection | `music` |
 | [Bookshelf](https://github.com/pennydreadful/bookshelf) | Automated audiobook acquisition | `audiobooks` |
 | [Subgen](https://github.com/McCloudS/subgen) | Generates subtitles from audio using AI (NVIDIA GPU required) | `subtitles` |
 
-Set `COMPOSE_PROFILES` in your `.env` to enable what you want:
+To enable add-ons, set `COMPOSE_PROFILES` in your `.env` file before running `docker compose up -d`:
 
 ```bash
-COMPOSE_PROFILES=                           # movies + shows only (default)
-COMPOSE_PROFILES=music                      # + music
-COMPOSE_PROFILES=music,audiobooks           # + music + audiobooks
-COMPOSE_PROFILES=music,audiobooks,subtitles # everything
+COMPOSE_PROFILES=                                    # movies + shows only (default — nothing extra)
+COMPOSE_PROFILES=requests                            # + Jellyseerr request portal
+COMPOSE_PROFILES=requests,music                      # + Jellyseerr + Lidarr
+COMPOSE_PROFILES=requests,music,audiobooks           # + Jellyseerr + Lidarr + Bookshelf
+COMPOSE_PROFILES=requests,music,audiobooks,subtitles # everything
 ```
+
+If you leave `COMPOSE_PROFILES` blank or don't set it at all, only the core stack starts. The optional containers are completely inert — they won't run, won't use resources, and won't appear in `docker ps`.
+
+---
+
+## The Full Pipeline
+
+Jellyseerr isn't included by default, but it's worth calling out because it's what makes this whole stack genuinely shareable with friends and family.
+
+Without it, you're the one manually searching for and adding content. With it, your friends get a polished Netflix-style interface where they can browse what's available, see what's already been requested, and request anything new — and they never need to know how the backend works.
+
+```
+Friend opens Jellyseerr → browses and clicks "Request" on a movie or show
+        ↓
+Jellyseerr automatically sends the request to Radarr or Sonarr
+        ↓
+Radarr/Sonarr searches your indexers (via Prowlarr) for the best match
+        ↓
+Best quality result gets sent to SABnzbd or your torrent client to download
+        ↓
+Download completes → Radarr/Sonarr imports, renames, and organizes the file
+        ↓
+Bazarr finds and downloads subtitles automatically
+        ↓
+Jellyfin/Plex picks up the new file — your friend gets a notification it's ready
+```
+
+Enable it by adding `requests` to `COMPOSE_PROFILES` in your `.env`.
 
 ---
 
@@ -70,19 +100,22 @@ Internet ──────────►│  │ Gluetun │◄─────
                     │  │ Bookshelf  │                  (opt.)  │
                     │  └────────────┘                          │
                     │                                          │
-                    │  ┌───────────┐  ┌──────────────┐       │
-                    │  │ Recyclarr │  │   SABnzbd    │       │
-                    │  │(clearnet) │  │  (clearnet)  │       │
-                    │  └───────────┘  └──────────────┘       │
                     │  ┌────────────┐  ┌──────────────┐      │
-                    │  │ Decluttarr │  │    Subgen    │      │
-                    │  │(clearnet)  │  │  (opt.)      │      │
+                    │  │ Jellyseerr │  │   SABnzbd    │      │
+                    │  │ (opt.)     │  │  (clearnet)  │      │
                     │  └────────────┘  └──────────────┘      │
+                    │  ┌───────────┐  ┌────────────┐         │
+                    │  │ Recyclarr │  │ Decluttarr │         │
+                    │  │(clearnet) │  │ (clearnet) │         │
+                    │  └───────────┘  └────────────┘         │
+                    │  ┌──────────────┐                       │
+                    │  │    Subgen    │                (opt.) │
+                    │  └──────────────┘                       │
                     └──────────────────────────────────────────┘
                          Autoheal monitors all containers
 ```
 
-SABnzbd, Recyclarr, and Decluttarr run on the regular network — Usenet traffic doesn't need VPN protection, and they only communicate with the other arr apps internally.
+SABnzbd, Recyclarr, Decluttarr, and Jellyseerr run on the regular network — they only communicate with the other arr apps internally and don't need VPN protection.
 
 ---
 
@@ -92,7 +125,7 @@ You'll need:
 
 1. **A server running Docker and Docker Compose** — Linux recommended. Unraid works great with [Compose Manager](https://forums.unraid.net/topic/114415-plugin-compose-manager/).
 2. **A WireGuard VPN subscription** — [ProtonVPN](https://protonvpn.com), [Mullvad](https://mullvad.net), [AirVPN](https://airvpn.org), or any WireGuard-capable provider. You'll need to download a WireGuard config file from their website.
-3. **A Usenet provider** (optional, for SABnzbd) — e.g. [UsenetPrime](https://www.usenetprime.com), Newshosting, Eweka.
+3. **A Usenet provider** (optional, for SABnzbd) — e.g. UsenetPrime, Newshosting, Eweka.
 4. **An NVIDIA GPU** (only if using the `subtitles` profile).
 
 ---
@@ -117,7 +150,7 @@ Open `.env` in a text editor and fill in:
 - Your WireGuard VPN credentials — see [docs/vpn-providers.md](docs/vpn-providers.md) for where to find these
 - Your paths (`APPDATA_PATH`, `MEDIA_PATH`, `DOWNLOADS_PATH`)
 - Your home network subnet (`LAN_SUBNET`)
-- Which optional services you want (`COMPOSE_PROFILES`)
+- Which optional services you want (`COMPOSE_PROFILES`) — leave blank for movies + shows only
 
 ### 3. Create directories
 
@@ -126,6 +159,9 @@ Open `.env` in a text editor and fill in:
 mkdir -p /opt/appdata/{gluetun,radarr,sonarr,prowlarr,bazarr,recyclarr,sabnzbd,decluttarr}
 mkdir -p /mnt/media/{movies,shows}
 mkdir -p /mnt/downloads
+
+# Only if using COMPOSE_PROFILES=requests
+mkdir -p /opt/appdata/jellyseerr
 
 # Only if using COMPOSE_PROFILES=music
 mkdir -p /opt/appdata/lidarr /mnt/media/music
@@ -163,7 +199,7 @@ This must return your VPN provider's IP — **not your home IP**. If it returns 
 
 ### 6. Configure each service
 
-See [docs/post-install-config.md](docs/post-install-config.md) for step-by-step setup of Prowlarr, Radarr, Sonarr, SABnzbd, Recyclarr, and the optional services.
+See [docs/post-install-config.md](docs/post-install-config.md) for step-by-step setup of Prowlarr, Radarr, Sonarr, SABnzbd, Recyclarr, Jellyseerr, and the optional services.
 
 ---
 
@@ -176,12 +212,13 @@ See [docs/post-install-config.md](docs/post-install-config.md) for step-by-step 
 | Prowlarr | 9696 | `http://YOUR_SERVER_IP:9696` |
 | Bazarr | 6767 | `http://YOUR_SERVER_IP:6767` |
 | SABnzbd | 8090 | `http://YOUR_SERVER_IP:8090` |
+| Jellyseerr | 5055 | `http://YOUR_SERVER_IP:5055` *(requests profile)* |
 | Lidarr | 8686 | `http://YOUR_SERVER_IP:8686` *(music profile)* |
 | Bookshelf | 8787 | `http://YOUR_SERVER_IP:8787` *(audiobooks profile)* |
 | Subgen | 9000 | `http://YOUR_SERVER_IP:9000` *(subtitles profile)* |
-| FlareSolverr | 8191 | Internal only — configured in Prowlarr |
+| FlareSolverr | 8191 | Internal only — configured inside Prowlarr |
 
-> Radarr, Sonarr, Prowlarr, Bazarr, Lidarr, FlareSolverr, and Bookshelf all share Gluetun's network. When connecting them to each other in their settings, use `localhost` — not container names.
+> Radarr, Sonarr, Prowlarr, Bazarr, Lidarr, FlareSolverr, and Bookshelf all share Gluetun's network namespace. When connecting them to each other in their settings, use `localhost` — not container names. When connecting Jellyseerr to Radarr/Sonarr, use `http://gluetun:7878` and `http://gluetun:8989`.
 
 ---
 
@@ -215,7 +252,7 @@ See [docs/vpn-providers.md](docs/vpn-providers.md) for how to extract the right 
 └── ...
 ```
 
-Radarr, Sonarr, and Lidarr need both the media directory and the downloads directory visible inside the container for hardlinks to work correctly. Hardlinks let the arr apps "move" files instantly without copying them — a significant time and disk I/O saver.
+Radarr, Sonarr, and Lidarr need both the media directory and the downloads directory visible inside the container for hardlinks to work correctly. Hardlinks let the arr apps move files instantly without copying them — a significant time and disk I/O saver.
 
 If you're pulling from a remote seedbox rather than downloading locally, hardlinks won't apply — configure Radarr/Sonarr to use remote path mappings instead.
 
@@ -251,6 +288,7 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for help with:
 - [TRaSH Guides](https://trash-guides.info) — quality profile recommendations
 - [Recyclarr](https://recyclarr.dev) — automates TRaSH Guide sync
 - [LinuxServer.io](https://linuxserver.io) — Docker images for Radarr, Sonarr, Prowlarr, Bazarr, Lidarr, SABnzbd
+- [Fallenbagel/jellyseerr](https://github.com/Fallenbagel/jellyseerr) — media request portal
 - [ManiMatter/decluttarr](https://github.com/ManiMatter/decluttarr) — stalled download cleanup
 - [pennydreadful/bookshelf](https://github.com/pennydreadful/bookshelf) — audiobook automation
 - [McCloudS/subgen](https://github.com/McCloudS/subgen) — Whisper-based subtitle generation

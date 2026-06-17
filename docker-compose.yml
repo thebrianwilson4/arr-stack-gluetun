@@ -3,15 +3,17 @@ name: arr_stack
 # ============================================================
 # OPTIONAL SERVICES — controlled via COMPOSE_PROFILES in .env
 #
+#   requests   → adds Jellyseerr (media request portal for friends/family)
 #   music      → adds Lidarr (music collection manager)
 #   audiobooks → adds Bookshelf (audiobook automation)
 #   subtitles  → adds Subgen (GPU subtitle generation, NVIDIA required)
 #
 # Examples:
-#   COMPOSE_PROFILES=                           # movies + shows only
-#   COMPOSE_PROFILES=music                      # + music
-#   COMPOSE_PROFILES=music,audiobooks           # + music + audiobooks
-#   COMPOSE_PROFILES=music,audiobooks,subtitles # everything
+#   COMPOSE_PROFILES=                                    # movies + shows only
+#   COMPOSE_PROFILES=requests                            # + request portal
+#   COMPOSE_PROFILES=requests,music                      # + requests + music
+#   COMPOSE_PROFILES=requests,music,audiobooks           # + requests + music + audiobooks
+#   COMPOSE_PROFILES=requests,music,audiobooks,subtitles # everything
 # ============================================================
 
 services:
@@ -156,7 +158,6 @@ services:
   recyclarr:
     image: ghcr.io/recyclarr/recyclarr:latest
     container_name: recyclarr
-    # Recyclarr only talks to Radarr/Sonarr on the internal Docker network
     networks:
       - arr_net
     user: ${PUID:-99}:${PGID:-100}
@@ -164,7 +165,6 @@ services:
       - ${APPDATA_PATH}/recyclarr:/config:rw
     environment:
       - TZ=${TZ:-America/Chicago}
-      # Syncs TRaSH custom formats daily at 3 AM
       - CRON_SCHEDULE=0 3 * * *
     depends_on:
       gluetun:
@@ -174,7 +174,6 @@ services:
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
     container_name: sabnzbd
-    # Usenet traffic doesn't require VPN protection
     networks:
       - arr_net
     ports:
@@ -193,7 +192,6 @@ services:
   decluttarr:
     image: ghcr.io/manimatter/decluttarr:latest
     container_name: decluttarr
-    # Monitors arr queues on the internal network — no VPN needed
     networks:
       - arr_net
     depends_on:
@@ -210,12 +208,31 @@ services:
   autoheal:
     image: willfarrell/autoheal:latest
     container_name: autoheal
-    # Monitors all containers and restarts any that become unhealthy
     environment:
       - AUTOHEAL_CONTAINER_LABEL=all
       - AUTOHEAL_INTERVAL=30
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # ============================================================
+  # OPTIONAL: REQUESTS — enable with COMPOSE_PROFILES=requests
+  # Netflix-style request portal for friends and family.
+  # They browse, click Request, and the rest is automatic.
+  # ============================================================
+  jellyseerr:
+    profiles:
+      - requests
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    networks:
+      - arr_net
+    ports:
+      - 5055:5055/tcp
+    environment:
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/jellyseerr:/app/config:rw
     restart: unless-stopped
 
   # ============================================================
