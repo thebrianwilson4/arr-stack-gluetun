@@ -1,21 +1,45 @@
+name: arr_stack
+
+# ============================================================
+# OPTIONAL SERVICES — controlled via COMPOSE_PROFILES in .env
+#
+#   music      → adds Lidarr (music collection manager)
+#   audiobooks → adds Bookshelf (audiobook automation)
+#   subtitles  → adds Subgen (GPU subtitle generation, NVIDIA required)
+#
+# Examples:
+#   COMPOSE_PROFILES=                           # movies + shows only
+#   COMPOSE_PROFILES=music                      # + music
+#   COMPOSE_PROFILES=music,audiobooks           # + music + audiobooks
+#   COMPOSE_PROFILES=music,audiobooks,subtitles # everything
+# ============================================================
+
 services:
+
+  # ============================================================
+  # GLUETUN — WireGuard VPN tunnel
+  # All arr traffic routes through this container.
+  # Nothing starts until Gluetun is confirmed healthy.
+  # ============================================================
   gluetun:
     image: qmcgaw/gluetun:latest
-    container_name: Gluetun
+    container_name: gluetun
     cap_add:
       - NET_ADMIN
     privileged: true
     networks:
       - arr_net
     ports:
-      - 6767:6767/tcp   # Bazarr
-      - 7878:7878/tcp   # Radarr
-      - 8388:8388/tcp   # Gluetun HTTP proxy
+      - 6767:6767/tcp    # Bazarr
+      - 7878:7878/tcp    # Radarr
+      - 8191:8191/tcp    # FlareSolverr (internal — used by Prowlarr)
+      - 8388:8388/tcp    # Gluetun HTTP proxy
       - 8388:8388/udp
-      - 8888:8888/tcp   # Gluetun control
-      - 8989:8989/tcp   # Sonarr
-      - 9696:9696/tcp   # Prowlarr
-      - 8191:8191/tcp   # FlareSolverr
+      - 8686:8686/tcp    # Lidarr (music profile)
+      - 8787:8787/tcp    # Bookshelf (audiobooks profile)
+      - 8888:8888/tcp    # Gluetun control server
+      - 8989:8989/tcp    # Sonarr
+      - 9696:9696/tcp    # Prowlarr
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
@@ -24,30 +48,42 @@ services:
       - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
       - WIREGUARD_ENDPOINT_IP=${WIREGUARD_ENDPOINT_IP}
       - WIREGUARD_ENDPOINT_PORT=${WIREGUARD_ENDPOINT_PORT:-51820}
-      # Allow LAN traffic to pass through (adjust to your subnet)
+      # Allow arr containers to reach local LAN services without going through VPN
       - FIREWALL_OUTBOUND_SUBNETS=${LAN_SUBNET:-192.168.1.0/24}
+      - CA_TS_FALLBACK_DIR=/gluetun
       - TZ=${TZ:-America/Chicago}
     volumes:
       - ${APPDATA_PATH}/gluetun:/gluetun:rw
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --timeout=5 https://ipinfo.io/ip || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
+  # ============================================================
+  # CORE ARR APPS — always enabled, all routed through Gluetun VPN
+  # These containers share Gluetun's network namespace.
+  # They communicate with each other via localhost, not container names.
+  # ============================================================
   radarr:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
-    # All traffic routed through Gluetun VPN tunnel
     network_mode: service:gluetun
     depends_on:
       gluetun:
         condition: service_healthy
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
       - UMASK=022
       - TZ=${TZ:-America/Chicago}
     volumes:
       - ${APPDATA_PATH}/radarr:/config:rw
       - ${MEDIA_PATH}:/data:rw
       - ${DOWNLOADS_PATH}:/downloads:rw
+      - ${CACHE_DOWNLOADS_PATH}:/cache_downloads:rw
     restart: unless-stopped
 
   sonarr:
@@ -58,14 +94,15 @@ services:
       gluetun:
         condition: service_healthy
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
       - UMASK=022
       - TZ=${TZ:-America/Chicago}
     volumes:
       - ${APPDATA_PATH}/sonarr:/config:rw
       - ${MEDIA_PATH}:/data:rw
       - ${DOWNLOADS_PATH}:/downloads:rw
+      - ${CACHE_DOWNLOADS_PATH}:/cache_downloads:rw
     restart: unless-stopped
 
   prowlarr:
@@ -76,8 +113,8 @@ services:
       gluetun:
         condition: service_healthy
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
       - UMASK=022
       - TZ=${TZ:-America/Chicago}
     volumes:
@@ -92,47 +129,13 @@ services:
       gluetun:
         condition: service_healthy
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
       - UMASK=022
       - TZ=${TZ:-America/Chicago}
     volumes:
       - ${APPDATA_PATH}/bazarr:/config:rw
       - ${MEDIA_PATH}:/data:rw
-    restart: unless-stopped
-
-  recyclarr:
-    image: ghcr.io/recyclarr/recyclarr:latest
-    container_name: recyclarr
-    # Recyclarr runs on clearnet — only talks to Radarr/Sonarr internally
-    networks:
-      - arr_net
-    user: ${PUID:-1000}:${PGID:-1000}
-    volumes:
-      - ${APPDATA_PATH}/recyclarr:/config
-    environment:
-      - TZ=${TZ:-America/Chicago}
-      # Syncs TRaSH custom formats daily at 3 AM
-      - CRON_SCHEDULE=0 3 * * *
-    depends_on:
-      gluetun:
-        condition: service_healthy
-    restart: unless-stopped
-
-  sabnzbd:
-    image: lscr.io/linuxserver/sabnzbd:latest
-    container_name: sabnzbd
-    # SABnzbd on clearnet — Usenet doesn't require VPN
-    environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - UMASK=022
-      - TZ=${TZ:-America/Chicago}
-    volumes:
-      - ${APPDATA_PATH}/sabnzbd:/config
-      - ${DOWNLOADS_PATH}:/downloads
-    ports:
-      - 8090:8080
     restart: unless-stopped
 
   flaresolverr:
@@ -145,6 +148,148 @@ services:
         condition: service_healthy
     environment:
       - LOG_LEVEL=info
+    restart: unless-stopped
+
+  # ============================================================
+  # CORE CLEARNET SERVICES — not tunneled through VPN
+  # ============================================================
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    # Recyclarr only talks to Radarr/Sonarr on the internal Docker network
+    networks:
+      - arr_net
+    user: ${PUID:-99}:${PGID:-100}
+    volumes:
+      - ${APPDATA_PATH}/recyclarr:/config:rw
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      # Syncs TRaSH custom formats daily at 3 AM
+      - CRON_SCHEDULE=0 3 * * *
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    # Usenet traffic doesn't require VPN protection
+    networks:
+      - arr_net
+    ports:
+      - 8090:8080/tcp
+    environment:
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/sabnzbd:/config:rw
+      - ${DOWNLOADS_PATH}:/downloads:rw
+      - ${CACHE_DOWNLOADS_PATH}:/cache_downloads:rw
+    restart: unless-stopped
+
+  decluttarr:
+    image: ghcr.io/manimatter/decluttarr:latest
+    container_name: decluttarr
+    # Monitors arr queues on the internal network — no VPN needed
+    networks:
+      - arr_net
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ:-America/Chicago}
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
+    volumes:
+      - ${APPDATA_PATH}/decluttarr:/app/config:rw
+    restart: unless-stopped
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    # Monitors all containers and restarts any that become unhealthy
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+      - AUTOHEAL_INTERVAL=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # ============================================================
+  # OPTIONAL: MUSIC — enable with COMPOSE_PROFILES=music
+  # ============================================================
+  lidarr:
+    profiles:
+      - music
+    image: lscr.io/linuxserver/lidarr:latest
+    container_name: lidarr
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/lidarr:/config:rw
+      - ${MEDIA_PATH}/music:/music:rw
+      - ${DOWNLOADS_PATH}:/downloads:rw
+    restart: unless-stopped
+
+  # ============================================================
+  # OPTIONAL: AUDIOBOOKS — enable with COMPOSE_PROFILES=audiobooks
+  # ============================================================
+  bookshelf:
+    profiles:
+      - audiobooks
+    image: ghcr.io/pennydreadful/bookshelf:hardcover
+    container_name: bookshelf
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-99}
+      - PGID=${PGID:-100}
+      - UMASK=022
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - ${APPDATA_PATH}/bookshelf:/config:rw
+      - ${MEDIA_PATH}/audiobooks:/audiobooks:rw
+      - ${DOWNLOADS_PATH}:/downloads:rw
+      - ${CACHE_DOWNLOADS_PATH}:/cache_downloads:rw
+    restart: unless-stopped
+
+  # ============================================================
+  # OPTIONAL: GPU SUBTITLES — enable with COMPOSE_PROFILES=subtitles
+  # Requires NVIDIA GPU and nvidia-docker2 / NVIDIA Container Runtime
+  # ============================================================
+  subgen:
+    profiles:
+      - subtitles
+    image: mccloud/subgen:latest
+    container_name: subgen
+    networks:
+      - arr_net
+    ports:
+      - 9000:9000/tcp
+    environment:
+      - CONCURRENT_TRANSCRIPTIONS=2
+      - USE_PATH_MAPPING=false
+      - MODEL_PATH=./models
+      - NVIDIA_VISIBLE_DEVICES=all
+      - COMPUTE_TYPE=float32
+      - CLEAR_VRAM_ON_COMPLETE=True
+    volumes:
+      - ${APPDATA_PATH}/subgen/models:/subgen/models:rw
+      - ${APPDATA_PATH}/subgen/subgen.env:/subgen/subgen.env:ro
+      - ${MEDIA_PATH}:/data:rw
+    runtime: nvidia
     restart: unless-stopped
 
 networks:
